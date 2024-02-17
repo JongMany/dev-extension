@@ -99,7 +99,9 @@ export default class StudyLogger {
 
   private onEvent(isWrite: boolean) {
     clearTimeout(this.debounceTimeoutId);
+
     this.debounceTimeoutId = setTimeout(() => {
+      console.log("onEvent");
       let editor = window.activeTextEditor;
       if (editor) {
         let doc = editor.document;
@@ -117,7 +119,6 @@ export default class StudyLogger {
 
       if (isWrite) {
         console.log("isWrite", window.activeTextEditor?.document);
-
         // this.statusBar?.show();
       }
     }, this.debounceMs);
@@ -142,6 +143,11 @@ export default class StudyLogger {
     if (Utils.isRemoteUri(doc.uri)) {
       file = `${doc.uri.authority}${doc.uri.path}`;
       file = file.replace("ssh-remote+", "ssh://");
+    }
+
+    // prevent duplicate heartbeats
+    if (isWrite && this.isDuplicateHeartbeat(file, time, selection)) {
+      return;
     }
 
     let args: string[] = [];
@@ -171,6 +177,7 @@ export default class StudyLogger {
       args.push("--write");
     }
     const binary = this.dependencies.getCliLocation();
+    console.log("binary", binary);
 
     // const options = Desktop.buildOptions();
     let proc = childProcess.execFile(binary, args, (error, stdout, stderr) => {
@@ -182,10 +189,16 @@ export default class StudyLogger {
     });
 
     proc.on("close", (code, _signal) => {
-      if (code === 0) {
+      console.log(code);
+
+      if (code === 0 || code === -2) {
         // if (this.showStatusBar) {
         this.getCodingActivity();
         // }
+      } else if (code === 102 || code === 112) {
+      } else if (code === 103) {
+      } else if (code === 104) {
+      } else {
       }
     });
   }
@@ -225,6 +238,8 @@ export default class StudyLogger {
     // if(!this.showStatusBar) return;
 
     const cutoff = Date.now() - this.fetchTodayInterval;
+
+    console.log("coding activity", this.lastFetchToday, cutoff);
 
     if (this.lastFetchToday > cutoff) {
       return;
