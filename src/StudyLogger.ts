@@ -8,7 +8,6 @@ import {
   TextDocument,
   Uri,
   tasks,
-  version,
   window,
   workspace,
 } from "vscode";
@@ -36,6 +35,8 @@ export default class StudyLogger {
   private fetchTodayInterval: number = 60000;
   private lastFetchToday: number = 0;
   // private showStatusBar: boolean = true;
+  private isCompiling: boolean;
+  private lastCompile: boolean;
   private showCodingActivity: boolean = false;
 
   constructor(public extensionPath: string) {
@@ -48,7 +49,7 @@ export default class StudyLogger {
     this.statusBar.text = "⏳Time";
     this.statusBar.tooltip = "Check Your Programming Time";
     this.statusBar.show();
-    console.log("statusBar");
+    // console.log("statusBar");
     this.dependencies = new Dependencies(this.extensionPath);
     this.setupEventListeners();
   }
@@ -66,18 +67,16 @@ export default class StudyLogger {
   }
 
   private onChange() {
-    console.log("change");
-
     this.onEvent(false);
   }
 
   private onSave() {
-    console.log("save");
+    // console.log("save");
     this.onEvent(true);
   }
 
   private onDidStartTask(e: TaskStartEvent): void {
-    console.log("start Task");
+    // console.log("start Task");
     if (e.execution.task.isBackground) {
       return;
     }
@@ -87,13 +86,12 @@ export default class StudyLogger {
     ) {
       return;
     }
-    // this.isCompiling = true;
+    this.isCompiling = true;
     this.onEvent(false);
   }
 
-  private onDidEndTask(): void {
-    // this.isCompiling = false;
-    console.log("end Task");
+  private onDidEndTask(e: TaskStartEvent): void {
+    this.isCompiling = false;
     this.onEvent(false);
   }
 
@@ -101,7 +99,7 @@ export default class StudyLogger {
     clearTimeout(this.debounceTimeoutId);
 
     this.debounceTimeoutId = setTimeout(() => {
-      console.log("onEvent");
+      // console.log("onEvent");
       let editor = window.activeTextEditor;
       if (editor) {
         let doc = editor.document;
@@ -109,16 +107,27 @@ export default class StudyLogger {
           let file = doc.fileName;
           let time: number = Date.now();
 
-          if (isWrite || this.lastFile !== file) {
-            this.sendHeartbeat(doc, time, editor.selection.start, isWrite);
+          if (
+            isWrite ||
+            this.lastFile !== file ||
+            this.enoughTimePassed(time) ||
+            this.lastCompile !== this.isCompiling
+          ) {
+            this.sendHeartbeat(
+              doc,
+              time,
+              editor.selection.start,
+              isWrite,
+              this.isCompiling
+            );
             this.lastFile = file;
             this.lastHeartbeat = time;
+            this.lastCompile = this.isCompiling;
           }
         }
       }
-
       if (isWrite) {
-        console.log("isWrite", window.activeTextEditor?.document);
+        // console.log("isWrite", window.activeTextEditor?.document);
         // this.statusBar?.show();
       }
     }, this.debounceMs);
@@ -128,79 +137,93 @@ export default class StudyLogger {
     doc: TextDocument,
     time: number,
     selection: Position,
-    isWrite: boolean
+    isWrite: boolean,
+    isCompiling: boolean
   ) {
-    this._sendHeartbeat(doc, time, selection, isWrite);
+    this._sendHeartbeat(doc, time, selection, isWrite, isCompiling);
   }
 
+  // 내부에서 getCodingActivity를 호출
   private _sendHeartbeat(
     doc: TextDocument,
     time: number,
     selection: Position,
-    isWrite: boolean
+    isWrite: boolean,
+    isCompiling: boolean
   ) {
     let file = doc.fileName;
+    // console.log("file", file, doc.uri, doc.uri.path);
+
     if (Utils.isRemoteUri(doc.uri)) {
       file = `${doc.uri.authority}${doc.uri.path}`;
       file = file.replace("ssh-remote+", "ssh://");
     }
 
     // prevent duplicate heartbeats
+    console.log(isWrite, this.isDuplicateHeartbeat(file, time, selection));
     if (isWrite && this.isDuplicateHeartbeat(file, time, selection)) {
+      console.log("out!");
+
       return;
     }
 
-    let args: string[] = [];
-    args.push("--entity", Utils.quote(file));
-    // TODO: CHECK THIS (INITIALIZE METHOD 확인)
-    // let user_agent =
-    // `${this.agentName}/${version} vscode-wakatime}/${this.extension.version}`;
+    const payload: any = {
+      type: "file",
+      entity: "file",
+      time: Date.now() / 1000,
+      lineno: String(selection.line + 1),
+      cursorpos: String(selection.character + 1),
+      lines: String(doc.lineCount),
+      is_write: isWrite,
+    };
 
-    // args.push("--plugin", Utils.quote(user_agent));
-    args.push("--lineno", String(selection.line + 1));
-    args.push("--cursorpos", String(selection.character + 1));
-    args.push("--lines-in-file", String(doc.lineCount));
-    if (Utils.isPullRequest(doc.uri)) {
-      args.push("--pr", "code reviewing");
-    }
+    console.log(payload, "payload");
+
+    let args: string[] = [];
+
     const project = this.getProjectName(doc.uri);
     if (project) {
-      args.push("--alternate-project", Utils.quote(project));
+      // args.push("--alternate-project", Utils.quote(project));
+      payload["project"] = project;
     }
 
     const folder = this.getProjectFolder(doc.uri);
-    if (folder) {
-      args.push("--project-folder", Utils.quote(folder));
+    if (folder && file.indexOf(folder) === 0) {
+      // args.push("--project-folder", Utils.quote(folder));
+      payload["project_root_count"] = this.countSlashesInPath(folder);
     }
 
-    if (isWrite) {
-      args.push("--write");
+    if (isCompiling) {
+      payload["category"] = "building";
+    } else if (Utils.isPullRequest(doc.uri)) {
+      payload["category"] = "code reviewing";
     }
-    const binary = this.dependencies.getCliLocation();
-    console.log("binary", binary);
+
+    // fetch 해야함...
 
     // const options = Desktop.buildOptions();
-    let proc = childProcess.execFile(binary, args, (error, stdout, stderr) => {
-      // if (error) {
-      //   if (stderr && stderr.toString() !== '') this.logger.error(stderr.toString());
-      //   if (stdout && stdout.toString() !== '') this.logger.error(stdout.toString());
-      //   this.logger.error(error.toString());
-      // }
-    });
+    // let proc = childProcess.execFile(binary, args, (error, stdout, stderr) => {
+    // if (error) {
+    //   if (stderr && stderr.toString() !== '') this.logger.error(stderr.toString());
+    //   if (stdout && stdout.toString() !== '') this.logger.error(stdout.toString());
+    //   this.logger.error(error.toString());
+    // }
+    // });
 
-    proc.on("close", (code, _signal) => {
-      console.log(code);
+    // proc.on("close", (code, _signal) => {
+    // console.log(code);
 
-      if (code === 0 || code === -2) {
-        // if (this.showStatusBar) {
-        this.getCodingActivity();
-        // }
-      } else if (code === 102 || code === 112) {
-      } else if (code === 103) {
-      } else if (code === 104) {
-      } else {
-      }
-    });
+    //   if (code === 0 || code === -2) {
+    //     // if (this.showStatusBar) {
+    //     // console.log(code, "code");
+    //     this.getCodingActivity();
+    //     // }
+    //   } else if (code === 102 || code === 112) {
+    //   } else if (code === 103) {
+    //   } else if (code === 104) {
+    //   } else {
+    //   }
+    // });
   }
 
   private isDuplicateHeartbeat(
@@ -208,21 +231,39 @@ export default class StudyLogger {
     time: number,
     selection: Position
   ): boolean {
+    // 5분 이상 지나고 동일한 파일을 저장하는 경우는 중복으로 판단
     let duplicate = false;
-    let minutes = 30;
+    let minutes = 5;
     let milliseconds = minutes * 60000;
+    try {
+      console.log(
+        this.dedupe[file].lastHeartbeatAt &&
+          this.dedupe[file].lastHeartbeatAt + milliseconds < time
+      );
+      console.log(
+        (this.dedupe[file]?.lastHeartbeatAt || 0) + milliseconds,
+        time
+      );
+    } catch (err) {
+      console.log("error", err);
+    }
+
     if (
       this.dedupe[file] &&
+      this.dedupe[file].lastHeartbeatAt &&
       this.dedupe[file].lastHeartbeatAt + milliseconds < time &&
       this.dedupe[file].selection.line === selection.line &&
       this.dedupe[file].selection.character === selection.character
     ) {
       duplicate = true;
     }
+
     this.dedupe[file] = {
       selection: selection,
       lastHeartbeatAt: time,
     };
+    // console.log("dedupe", this.dedupe, time);
+
     return duplicate;
   }
 
@@ -234,12 +275,13 @@ export default class StudyLogger {
     this.statusBar?.dispose();
   }
 
+  // 특정 시간 이상 지난 경우에 coding을 했다고 판단
   private getCodingActivity() {
     // if(!this.showStatusBar) return;
 
     const cutoff = Date.now() - this.fetchTodayInterval;
 
-    console.log("coding activity", this.lastFetchToday, cutoff);
+    // console.log("coding activity", this.lastFetchToday, cutoff);
 
     if (this.lastFetchToday > cutoff) {
       return;
@@ -254,6 +296,7 @@ export default class StudyLogger {
   }
 
   // TODO:
+  // 특정 시간 이상 지난 경우, status를 변경
   private _getCodingActivity() {
     let args = [
       "--today",
@@ -263,7 +306,11 @@ export default class StudyLogger {
       // Utils.quote(user_agent),
     ];
 
+    // console.log("_getCodingActivity");
+
     const binary = this.dependencies.getCliLocation();
+    // console.log("binary", binary);
+
     const options = {};
     try {
       let proc = childProcess.execFile(
@@ -278,17 +325,18 @@ export default class StudyLogger {
           }
         }
       );
+
       let output = "";
       if (proc.stdout) {
         proc.stdout.on("data", (data: string | null) => {
           if (data) {
             output += data;
-            console.log("output", output);
           }
         });
       }
+
       proc.on("close", (code, _signal) => {
-        if (code === 0) {
+        if (code === -2) {
           // if (this.showStatusBar) {
           if (output) {
             let jsonData: any;
@@ -300,6 +348,7 @@ export default class StudyLogger {
               // );
             }
             // if (jsonData) this.hasTeamFeatures = jsonData?.has_team_features;
+            // console.log("jsonData", jsonData);
             if (jsonData?.text) {
               if (this.showCodingActivity) {
                 this.updateStatusBarText(jsonData.text.trim());
@@ -367,6 +416,10 @@ export default class StudyLogger {
     return workspace.name || "";
   }
 
+  private enoughTimePassed(time: number): boolean {
+    return this.lastHeartbeat + 120000 < time;
+  }
+
   private getProjectFolder(uri: Uri): string {
     if (!workspace) {
       return "";
@@ -374,12 +427,34 @@ export default class StudyLogger {
     const workspaceFolder = workspace.getWorkspaceFolder(uri);
     if (workspaceFolder) {
       try {
+        // console.log("workspaceFolder", workspaceFolder.uri.fsPath);
         return workspaceFolder.uri.fsPath;
       } catch (e) {}
     }
+
     if (workspace.workspaceFolders && workspace.workspaceFolders.length) {
       return workspace.workspaceFolders[0].uri.fsPath;
     }
     return "";
+  }
+
+  private countSlashesInPath(path: string): number {
+    if (!path) {
+      return 0;
+    }
+
+    const windowsNetDrive = path.indexOf("\\\\") === 0;
+
+    path = path.replace(/[\\/]+/, "/");
+
+    if (windowsNetDrive) {
+      path = "\\\\" + path.slice(1);
+    }
+
+    if (!path.endsWith("/")) {
+      path = path + "/";
+    }
+
+    return (path.match(/\//g) || []).length;
   }
 }
