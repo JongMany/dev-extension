@@ -10,18 +10,23 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "*"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "study-log.helloWorld",
+        "command": "studyLog.helloWorld",
         "title": "Hello World"
       },
       {
-        "command": "study-log.showLog",
+        "command": "studyLog.showLog",
         "title": "Show Log"
+      },
+      {
+        "command": "studyLog.api_key",
+        "title": "study-log: Api Key"
       }
     ]
   },

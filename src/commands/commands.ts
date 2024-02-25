@@ -1,3 +1,4 @@
 export const COMMANDS = {
-  CODING_ACTIVITY: "study-log.coding_activity",
+  CODING_ACTIVITY: "studyLog.coding_activity",
+  API_KEY: "studyLog.api_key",
 };

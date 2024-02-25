@@ -15,11 +15,23 @@ import StudyLogger from "./StudyLogger";
 let studyLogger: StudyLogger;
 
 export function activate(ctx: ExtensionContext) {
-  studyLogger = new StudyLogger(ctx.extensionPath);
+  studyLogger = new StudyLogger(ctx.extensionPath, ctx.globalState);
+  console.log("ctx", ctx.globalState);
+
+  ctx.globalState?.setKeysForSync(["studyLog.apiKey"]);
 
   if (ctx.workspaceState.get("complete") === undefined) {
     ctx.workspaceState.update("complete", {});
   }
+  console.log(ctx.globalState.get("studyLog.apiKey"));
+
+  ctx.subscriptions.push(
+    commands.registerCommand(COMMANDS.API_KEY, function () {
+      console.log("API_KEY");
+
+      studyLogger.promptForApiKey();
+    })
+  );
 
   ctx.subscriptions.push(
     commands.registerCommand(COMMANDS.CODING_ACTIVITY, () => {})

@@ -1,12 +1,14 @@
 import * as childProcess from "child_process";
 import {
   Disposable,
+  Memento,
   Position,
   StatusBarAlignment,
   StatusBarItem,
   TaskStartEvent,
   TextDocument,
   Uri,
+  env,
   tasks,
   window,
   workspace,
@@ -25,6 +27,7 @@ type FileSelectionMap = {
 
 export default class StudyLogger {
   private statusBar?: StatusBarItem = undefined;
+  private apiKeyBar?: StatusBarItem = undefined;
   private disposable: Disposable = Disposable.from();
   private lastHeartbeat: number = 0;
   private lastFile: string = "";
@@ -38,14 +41,25 @@ export default class StudyLogger {
   private isCompiling: boolean;
   private lastCompile: boolean;
   private showCodingActivity: boolean = false;
+  private config: Memento;
 
-  constructor(public extensionPath: string) {
+  constructor(public extensionPath: string, config: Memento) {
     this.extensionPath = extensionPath;
+    this.config = config;
   }
 
   initialize() {
+    // API Key Bar
+    this.apiKeyBar = window.createStatusBarItem(StatusBarAlignment.Right, 5);
+    this.apiKeyBar.command = "studyLog.api_key";
+    let defaultVal: string = this.config.get("studyLog.apiKey") || "🔑";
+    this.apiKeyBar.text = defaultVal.length > 0 ? "" : "enroll Your API Key";
+    this.apiKeyBar.tooltip = "Enroll Your API Key";
+    this.apiKeyBar.show();
+
+    // Status Bar
     this.statusBar = window.createStatusBarItem(StatusBarAlignment.Right, 4);
-    this.statusBar.command = "study-log.showLog";
+    this.statusBar.command = "studyLog.showLog";
     this.statusBar.text = "⏳Time";
     this.statusBar.tooltip = "Check Your Programming Time";
     this.statusBar.show();
@@ -144,7 +158,7 @@ export default class StudyLogger {
   }
 
   // 내부에서 getCodingActivity를 호출
-  private _sendHeartbeat(
+  private async _sendHeartbeat(
     doc: TextDocument,
     time: number,
     selection: Position,
@@ -160,7 +174,13 @@ export default class StudyLogger {
     }
 
     // prevent duplicate heartbeats
-    console.log(isWrite, this.isDuplicateHeartbeat(file, time, selection));
+    // console.log(isWrite, this.isDuplicateHeartbeat(file, time, selection));
+    console.log(
+      "config",
+      this.config,
+      this.config.get("studyLog.apiKey"),
+      env.appHost
+    );
     if (isWrite && this.isDuplicateHeartbeat(file, time, selection)) {
       console.log("out!");
 
@@ -456,5 +476,42 @@ export default class StudyLogger {
     }
 
     return (path.match(/\//g) || []).length;
+  }
+
+  public promptForApiKey(hidden: boolean = true) {
+    let defaultVal: string = this.config.get("studyLog.apiKey") || "";
+    let promptOptions = {
+      prompt: "StudyLog API Key",
+      placeHolder: "Enter your StudyLog API Key",
+      value: defaultVal,
+      ignoreFocusOut: true,
+      password: hidden,
+    };
+    window.showInputBox(promptOptions).then((apiKey) => {
+      console.log("apiKey", apiKey, apiKey?.length);
+
+      if (apiKey) {
+        // let invalid = promptOptions.validateInput(apiKey);
+        let invalid = apiKey.length <= 0;
+        if (!invalid) {
+          this.config.update("studyLog.apiKey", apiKey);
+          if (this.apiKeyBar) {
+            this.apiKeyBar.text = "🔑";
+          }
+          // this.apiKeyBar?.text = "StudyLog api key updated";
+          // window.setStatusBarMessage("StudyLog api key updated");
+        } else {
+          if (this.apiKeyBar) {
+            this.apiKeyBar.text = "Invalid....";
+          }
+          // window.setStatusBarMessage("Invalid....");
+        }
+      } else {
+        if (this.apiKeyBar) {
+          this.config.update("studyLog.apiKey", apiKey);
+          this.apiKeyBar.text = "❌";
+        }
+      }
+    });
   }
 }
