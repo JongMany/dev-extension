@@ -61,5 +61,9 @@
     "node-fetch": "^2.7.0",
     "which": "^4.0.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JongMany/dev-extension"
+  }
 }
