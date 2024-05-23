@@ -8,13 +8,13 @@ import {
   TaskStartEvent,
   TextDocument,
   Uri,
-  env,
   tasks,
   window,
   workspace,
 } from "vscode";
 import { Utils } from "./utils";
 import { Dependencies } from "./dependencies";
+import fetch from "node-fetch";
 
 type FileSelection = {
   selection: Position;
@@ -35,7 +35,7 @@ export default class StudyLogger {
   private dedupe: FileSelectionMap = {};
   private debounceTimeoutId: any = null;
   private dependencies: Dependencies;
-  private fetchTodayInterval: number = 60000;
+  private fetchTodayInterval: number = 1000 * 60 * 30; // TODO: 1시간  => 30분으로 변경 필요 (1000->1초)
   private lastFetchToday: number = 0;
   // private showStatusBar: boolean = true;
   private isCompiling: boolean;
@@ -154,7 +154,17 @@ export default class StudyLogger {
     isWrite: boolean,
     isCompiling: boolean
   ) {
-    this._sendHeartbeat(doc, time, selection, isWrite, isCompiling);
+    const result = this.getCodingActivity();
+    if (result.isProgramInProgress) {
+      this._sendHeartbeat(
+        doc,
+        time,
+        selection,
+        isWrite,
+        isCompiling,
+        result.time as number
+      );
+    }
   }
 
   // 내부에서 getCodingActivity를 호출
@@ -163,7 +173,8 @@ export default class StudyLogger {
     time: number,
     selection: Position,
     isWrite: boolean,
-    isCompiling: boolean
+    isCompiling: boolean,
+    programmingTime: number
   ) {
     let file = doc.fileName;
     // console.log("file", file, doc.uri, doc.uri.path);
@@ -173,28 +184,43 @@ export default class StudyLogger {
       file = file.replace("ssh-remote+", "ssh://");
     }
 
+    const extensionName = file.split(".").pop();
+
     // prevent duplicate heartbeats
     // console.log(isWrite, this.isDuplicateHeartbeat(file, time, selection));
-    console.log(
-      "config",
-      this.config,
-      this.config.get("studyLog.apiKey"),
-      env.appHost
-    );
+    // console.log(
+    //   "config",
+    //   this.config,
+    //   this.config.get("studyLog.apiKey"),
+    //   env.appHost
+    // );
     if (isWrite && this.isDuplicateHeartbeat(file, time, selection)) {
       console.log("out!");
-
       return;
     }
+    // console.log(Date.now() - this.lastFetchToday, this.lastFetchToday);
+
+    // UTC
+    const curr = new Date();
+    const utc = curr.getTime() + curr.getTimezoneOffset() * 60 * 1000;
+
+    const KR_TIME_DIFF = 9 * 60 * 60 * 1000;
+    // 한국 시간(KST)은 UTC시간보다 9시간 더 빠릅니다.
+    // 9시간을 밀리초 단위로 변환하였습니다.
+    const kr_curr = new Date(utc + KR_TIME_DIFF).toISOString();
 
     const payload: any = {
       type: "file",
       entity: "file",
-      time: Date.now() / 1000,
-      lineno: String(selection.line + 1),
-      cursorpos: String(selection.character + 1),
+      extensionName: extensionName,
+      docs: file.split("/").slice(1, -1),
+      fileName: file.split("/").pop()?.split(".")[0],
+      currentTime: kr_curr,
+      lineNo: String(selection.line + 1),
+      cursorPos: String(selection.character + 1),
       lines: String(doc.lineCount),
       is_write: isWrite,
+      programmingTime: programmingTime,
     };
 
     console.log(payload, "payload");
@@ -219,7 +245,20 @@ export default class StudyLogger {
       payload["category"] = "code reviewing";
     }
 
+    console.log(payload, "payload");
     // fetch 해야함...
+    const body = { apiKey: this.config.get("studyLog.apiKey"), payload };
+    // console.log(body);
+    // const res = await fetch("http://localhost:8080/time/save", {
+    const res = await fetch("http://43.203.82.210:8080/time/save", {
+      // body: JSON.stringify(body),
+      // body: JSON.stringify({ apiKey: "aaaa1111", payload }),
+      body: JSON.stringify(body),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    const data = await res.json();
+    console.log("data", data);
 
     // const options = Desktop.buildOptions();
     // let proc = childProcess.execFile(binary, args, (error, stdout, stderr) => {
@@ -256,14 +295,14 @@ export default class StudyLogger {
     let minutes = 5;
     let milliseconds = minutes * 60000;
     try {
-      console.log(
-        this.dedupe[file].lastHeartbeatAt &&
-          this.dedupe[file].lastHeartbeatAt + milliseconds < time
-      );
-      console.log(
-        (this.dedupe[file]?.lastHeartbeatAt || 0) + milliseconds,
-        time
-      );
+      // console.log(
+      //   this.dedupe[file].lastHeartbeatAt &&
+      //     this.dedupe[file].lastHeartbeatAt + milliseconds < time
+      // );
+      // console.log(
+      //   (this.dedupe[file]?.lastHeartbeatAt || 0) + milliseconds,
+      //   time
+      // );
     } catch (err) {
       console.log("error", err);
     }
@@ -289,7 +328,7 @@ export default class StudyLogger {
 
   // 종료시키는 것.
   dispose() {
-    console.log("dispose");
+    // console.log("dispose");
 
     this.disposable.dispose();
     this.statusBar?.dispose();
@@ -299,20 +338,20 @@ export default class StudyLogger {
   private getCodingActivity() {
     // if(!this.showStatusBar) return;
 
-    const cutoff = Date.now() - this.fetchTodayInterval;
+    // TODO: 이 로직을 보강해야함. (보강 완료한듯...)
+    const now = Date.now();
+    const programmingTime = now - this.lastFetchToday;
+    const checkIsRest = programmingTime > this.fetchTodayInterval; // 휴식 중인지 판단
+    // console.log(programmingTime, now, this.lastFetchToday);
 
-    // console.log("coding activity", this.lastFetchToday, cutoff);
-
-    if (this.lastFetchToday > cutoff) {
-      return;
+    if (checkIsRest) {
+      this.lastFetchToday = now;
+      return { isProgramInProgress: false, time: null };
     }
 
-    this.lastFetchToday = Date.now();
-
-    // this.options.getApiKey((apiKey) => {
-    // if (!apiKey) return;
+    this.lastFetchToday = now;
     this._getCodingActivity();
-    // });
+    return { isProgramInProgress: true, time: programmingTime };
   }
 
   // TODO:
